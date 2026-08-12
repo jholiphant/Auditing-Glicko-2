@@ -74,6 +74,20 @@ Real games from the **[Lichess Open Database](https://database.lichess.org/)** (
 - **Cohort:** **21,488 highly active blitz players** (≥5,000 games each), forming one fully-connected comparison graph — **~5.2 million games**.
 - **Split:** 10-month training window + 2-month terminal holdout, for leakage-free *prospective* evaluation.
 
+  Our final schema is as follows:
+
+| Column | Type | Description |
+|---|---|---|
+| `white` | int32 | Player id (white side), 0…21,487; contiguous after bot removal |
+| `black` | int32 | Player id (black side) |
+| `y` | int8 | Outcome: `0` black win, `1` draw, `2` white win |
+| `t_idx` | int16 | Time bucket, `0`…`11` (monthly, Jun 2025 → May 2026) |
+| `c_idx` | int8 | Time control class: `0` bullet, `1` blitz, `2` rapid, `3` classical |
+| `flagged` | bool | `True` if the game ended on the clock (time forfeit / insufficient material) — the Part B clock channel |
+| `is_train` | bool | `True` = training window (buckets 0–9), `False` = terminal holdout (buckets 10–11) |
+| `glicko_white` | float64 | White's pre-game Glicko-2 rating (baseline comparison + dynamic-model seed) |
+| `glicko_black` | float64 | Black's pre-game Glicko-2 rating |
+
 ### A clean side-result: the model found the bots by itself
 
 Fitting the static model, the highest-skill accounts turned out to be **chess engines** — `Stockfish13`, `ArasanX`, and others — clustered at the θ ceiling (~+3.1). The model flagged them with no knowledge of account types, purely from skill. Cross-checking against the Lichess titles API confirmed **114 BOT accounts** (including human-*named* ones like `Moment-That-Inspires` that a name filter would miss). Removing their 348k games (6.3%) is the cleaned dataset everything else runs on.
