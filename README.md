@@ -92,6 +92,8 @@ Real games from the **[Lichess Open Database](https://database.lichess.org/)** (
 
 ## Part A — Auditing Glicko-2 on its own terms
 
+Part A takes the base model and adds time. A single θ per player becomes a trajectory across twelve monthly buckets, linked by a Gaussian random walk whose step size τ is the object of interest — it is the exact quantity Glicko-2 fixes by hand as its volatility constant. The sampler's skill step is replaced by forward-filtering backward-sampling: a Kalman filter runs up each player's twelve-bucket chain combining the random-walk prior with each month's game evidence, then a backward pass draws the entire trajectory jointly. Sampling the whole path at once — rather than one bucket at a time — is what lets the chain mix, since adjacent months are strongly correlated. To make the comparison against Glicko-2 information-fair rather than penalizing our model for seeing only a twelve-month window, each player's bucket-zero prior is seeded with their pre-window Glicko rating. The result is a direct read on Glicko-2's core assumption: estimated freely, the drift τ comes out far smaller than Glicko-2 assumes, which is why the dynamic model collapses onto the static one.
+
 We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
 
 We built a **baseline ladder** — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
@@ -123,6 +125,8 @@ That's a losing fight, fairly fought — and the *way* it loses is the finding. 
 ---
 
 ## Part B — The information Glicko-2 throws away
+
+Part B keeps the ordered-probit outcome model but splits the single skill θ into two latent abilities per player: board strength β and clock discipline κ. The key move is that a game now speaks through two observation channels instead of one. Every game contributes a flag-fall observation — did it end on the clock? — modeled as a probit in the sum of the two players' κ, since a flag is more likely when either player manages time poorly. Decisive games additionally contribute a win observation: board-decided games are the ordinary ordered probit in the β-difference, while clock-decided games are a probit in the κ-difference, since the better clock-manager wins the flag race. Because κ enters through both a sum (the flag channel) and a difference (the flag-race channel) while β enters only through board outcomes, the two skills are separately identified — the augmentation and conjugate updates run once per channel, and κ's update aggregates evidence from both places it appears. This is what lets the model measure a dimension of skill Glicko-2's single rating cannot represent.
 
 Glicko-2 sees only *win / draw / loss*. It discards **how** a game ended. But **~28% of decided games end on the clock** (a flag-fall), and *clock management is plausibly a different skill from board strength.*
 
@@ -177,7 +181,9 @@ A fair, prospective, leakage-free **0.0197 RPS improvement** — the project's c
 
 ---
 
-## Part C — Cheater detection, for free
+## Part C — Cheater detection
+
+Part C returns to the dynamic model and changes one assumption: the random-walk steps are no longer Gaussian but Student-t, implemented as an inverse-gamma scale mixture. Concretely, each month-to-month step gets its own latent variance inflator λ, so a step's innovation variance becomes τ²·λ rather than a fixed τ². A normal month of play keeps λ near one; a jump too large for ordinary drift is absorbed cheaply by inflating λ, because the heavy tail makes large steps far less surprising than a Gaussian would. Conjugacy is preserved — with λ known, the step is Gaussian and FFBS runs unchanged, and λ itself has a clean conjugate inverse-gamma update given the observed jump. The posterior mean of λ then serves directly as a per-player, per-month anomaly score: it flags accounts whose skill jumps discontinuously, distinguishing genuine gradual improvement from the step-changes characteristic of sandbagging or account transitions — a capability that emerges from the generative model rather than being built in.
 
 If skill drifts *gradually* (τ ≈ 0.03), then a **sudden jump** is a red flag — the signature of sandbagging, account-sharing, or a switch to engine assistance. We make the random-walk innovations **heavy-tailed** (Student-t, via an inverse-gamma scale mixture):
 
