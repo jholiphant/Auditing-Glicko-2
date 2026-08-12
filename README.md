@@ -50,6 +50,33 @@ def _sample_D(key, mu, y, gamma):
 
 Once `D` is drawn, every skill update is a conjugate Gaussian step — the entire sweep is JIT-compiled and runs resident on the GPU, giving ~2 minutes for a 2,000-sweep chain over 5.2M games (versus ~78 minutes for the same math on CPU).
 
+---
+
+## The data
+
+Real games from the **[Lichess Open Database](https://database.lichess.org/)** (public domain, ~1 billion games).
+
+- **Window:** 12 monthly archives, June 2025 → May 2026.
+- **Extraction:** streamed `zstd`-compressed PGN over HTTP, header-only parsing — nothing large ever hits disk.
+- **Cohort:** **21,488 highly active blitz players** (≥5,000 games each), forming one fully-connected comparison graph — **~5.2 million games**.
+- **Split:** 10-month training window + 2-month terminal holdout, for leakage-free *prospective* evaluation.
+
+  Our final schema is as follows:
+
+| Column | Type | Description |
+|---|---|---|
+| `white` | int32 | Player id (white side), 0…21,487; contiguous after bot removal |
+| `black` | int32 | Player id (black side) |
+| `y` | int8 | Outcome: `0` black win, `1` draw, `2` white win |
+| `t_idx` | int16 | Time bucket, `0`…`11` (monthly, Jun 2025 → May 2026) |
+| `c_idx` | int8 | Time control class: `0` bullet, `1` blitz, `2` rapid, `3` classical |
+| `flagged` | bool | `True` if the game ended on the clock (time forfeit / insufficient material) — the Part B clock channel |
+| `is_train` | bool | `True` = training window (buckets 0–9), `False` = terminal holdout (buckets 10–11) |
+| `glicko_white` | float64 | White's pre-game Glicko-2 rating (baseline comparison + dynamic-model seed) |
+| `glicko_black` | float64 | Black's pre-game Glicko-2 rating |
+
+---
+
 ### The model
 
 Skill is a latent variable we never observe directly. We model each game's outcome as a coarsening of a latent Gaussian *performance difference*:
@@ -81,33 +108,6 @@ A hand-written **blocked Gibbs sampler**. Each sweep:
 The output is a *posterior*: a cloud of samples that gives both a rating and uncertainty, and predictions that average over that uncertainty.
 
 **Every sampler is validated by simulation-based recovery** before it touches real data: generate games from *known* skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
-
-
-
----
-
-## The data
-
-Real games from the **[Lichess Open Database](https://database.lichess.org/)** (public domain, ~1 billion games).
-
-- **Window:** 12 monthly archives, June 2025 → May 2026.
-- **Extraction:** streamed `zstd`-compressed PGN over HTTP, header-only parsing — nothing large ever hits disk.
-- **Cohort:** **21,488 highly active blitz players** (≥5,000 games each), forming one fully-connected comparison graph — **~5.2 million games**.
-- **Split:** 10-month training window + 2-month terminal holdout, for leakage-free *prospective* evaluation.
-
-  Our final schema is as follows:
-
-| Column | Type | Description |
-|---|---|---|
-| `white` | int32 | Player id (white side), 0…21,487; contiguous after bot removal |
-| `black` | int32 | Player id (black side) |
-| `y` | int8 | Outcome: `0` black win, `1` draw, `2` white win |
-| `t_idx` | int16 | Time bucket, `0`…`11` (monthly, Jun 2025 → May 2026) |
-| `c_idx` | int8 | Time control class: `0` bullet, `1` blitz, `2` rapid, `3` classical |
-| `flagged` | bool | `True` if the game ended on the clock (time forfeit / insufficient material) — the Part B clock channel |
-| `is_train` | bool | `True` = training window (buckets 0–9), `False` = terminal holdout (buckets 10–11) |
-| `glicko_white` | float64 | White's pre-game Glicko-2 rating (baseline comparison + dynamic-model seed) |
-| `glicko_black` | float64 | Black's pre-game Glicko-2 rating |
 
 ---
 
