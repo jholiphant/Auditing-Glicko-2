@@ -6,7 +6,7 @@
 
 This project audits **Glicko-2**, the rating system behind Lichess, by writing down the full generative model it *approximates* and computing the exact Bayesian posterior with a hand-written MCMC sampler. Along the way it finds that Glicko-2's ratings are miscalibrated in scale, overstate how fast skill changes, and are structurally blind to an entire dimension of chess ability — and it builds a rating that beats Glicko-2 on the games that dimension explains.
 
-Everything here is implemented **from scratch in JAX** — no pre-trained models, no black-box inference libraries. The samplers, the augmentation schemes, the forward-filtering backward-sampling — all written and validated by hand.
+Everything here is implemented [**from scratch in JAX**](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html). The samplers, the augmentation schemes, the forward-filtering backward-sampling — all written and validated by hand.
 
 ---
 
@@ -30,6 +30,25 @@ Glicko-2 is already a Bayesian method — it maintains a Gaussian belief (a rati
 - It sees **only win/draw/loss** — nothing about *how* a game was decided.
 
 This project removes those shortcuts one at a time and measures what each was costing.
+
+The augmentation step is the engine of the sampler — it turns an intractable ordinal likelihood into a clean Gaussian one by drawing the latent performance difference `D` for every game from a truncated normal, using a GPU-native inverse-CDF:
+
+```python
+def _sample_D(key, mu, y, gamma):
+    """Draw D_g from N(mu,1), truncated to the region matching the outcome.
+       y=2 white win: D >  gamma
+       y=1 draw:     -gamma <= D <= gamma
+       y=0 black win: D < -gamma
+    """
+    lo = jnp.where(y == 2, gamma, jnp.where(y == 1, -gamma, -jnp.inf))
+    hi = jnp.where(y == 2, jnp.inf, jnp.where(y == 1, gamma, -gamma))
+    Fa, Fb = ndtr(lo - mu), ndtr(hi - mu)          # CDF at the bounds
+    u = random.uniform(key, mu.shape, dtype=mu.dtype)
+    p = jnp.clip(Fa + u * (Fb - Fa), 1e-12, 1 - 1e-12)
+    return mu + ndtri(p)                            # invert -> a valid draw
+```
+
+Once `D` is drawn, every skill update is a conjugate Gaussian step — the entire sweep is JIT-compiled and runs resident on the GPU, giving ~2 minutes for a 2,000-sweep chain over 5.2M games (versus ~78 minutes for the same math on CPU).
 
 ### The model
 
@@ -59,9 +78,11 @@ A hand-written **blocked Gibbs sampler**. Each sweep:
 2. **Update skill** — draw each player's full trajectory jointly via **forward-filtering backward-sampling (FFBS)**.
 3. **Update shared parameters** — τ, γ, h via conjugate and Metropolis-within-Gibbs steps.
 
-The output isn't a point estimate — it's a *posterior*: a cloud of samples that gives both a rating **and honest uncertainty**, and predictions that average over that uncertainty.
+The output is a *posterior*: a cloud of samples that gives both a rating and uncertainty, and predictions that average over that uncertainty.
 
-**Every sampler is validated by simulation-based recovery** before it touches real data: generate games from *known* skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust.
+**Every sampler is validated by simulation-based recovery** before it touches real data: generate games from *known* skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
+
+
 
 ---
 
@@ -97,6 +118,30 @@ Part A takes the base model and adds time. A single θ per player becomes a traj
 We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
 
 We built a **baseline ladder** — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
+
+Each rung of the ladder fits *only* what it's allowed and scores prospectively on the holdout — this is the ordered-probit prediction as a function of the Glicko rating difference, with scale `s`, draw margin `g`, and white advantage `h`:
+
+```python
+def probs_from(h, g, s, m):
+    z = s * diff[m] + h                            # diff = Glicko gap / 173.7
+    pW = norm.sf(g - z); pL = norm.cdf(-g - z)
+    return np.stack([pL, np.clip(1 - pW - pL, 1e-9, 1), pW], axis=1)
+```
+
+Adding one capability at a time and re-fitting by maximum likelihood produces the decomposition:
+
+```
+=== clean baseline ladder (holdout RPS) ===
+  B-null  marginal rates  0.49835
+  B0      raw Glicko      0.49514   (delta +0.00321)
+  B0b     + scale         0.48517   (delta +0.00997)   <- the big one
+  B1      + draw margin   0.48411   (delta +0.00106)
+  B2      + white adv     0.48351   (delta +0.00060)
+
+  fitted: h=0.0446  gamma=0.0597  scale=0.4372
+```
+
+The scale correction alone (**+0.00997**) dwarfs every other rung — the fitted `scale=0.44` against a theoretical `0.588` is the miscalibration finding in one number.
 
 | Rung | What it adds | Holdout RPS | Δ |
 |---|---|---|---|
@@ -144,6 +189,35 @@ FLAG channel (all games):   P(game flags) = Φ( −(κ_white + κ_black) + c )
 WIN channel (decisive games):
    board-decided  →  ordered probit in (β_white − β_black)
    clock-decided  →  probit in (κ_white − κ_black)   ← better clock discipline wins the flag race
+```
+
+Board strength `β` updates only from board-decided games. Clock discipline `κ` is the interesting one — it aggregates evidence from **both** channels it appears in: the flag indicator (a *sum* of κ's) and the flag-race winner (a *difference*):
+
+```python
+# (a) flag channel — kappa's LEVEL: obs of kappa_w = -(Fstar - c) - kappa_b
+obs_kw_flag = -rF - kb_
+obs_kb_flag = -rF - kw
+# (b) flag-race winner — kappa's ORDERING: Wstar = kappa_w - kappa_b + noise
+obs_kw_win = jnp.where(flag_dec, Wstar + kb_, 0.0)
+obs_kb_win = jnp.where(flag_dec, -Wstar + kw, 0.0)
+
+# kappa's conjugate update pools BOTH sources (every game + flag games)
+sum_k = (jnp.zeros(n_players).at[w].add(obs_kw_flag).at[b].add(obs_kb_flag)
+                             .at[w].add(obs_kw_win).at[b].add(obs_kb_win))
+kappa = (sum_k / pp_k) + jnp.sqrt(1.0/pp_k) * random.normal(kk, (n_players,))
+```
+
+On real data, the two skills fall out as genuinely distinct — and Glicko is blind to one of them:
+
+```
+corr(kappa, observed flag-rate): -0.936   <- kappa IS real clock skill
+corr(beta,  Glicko rating):      +0.878   <- Glicko is a board-strength rating
+corr(kappa, Glicko rating):      -0.040   <- ...and blind to the clock
+corr(beta,  kappa):              -0.285   <- the two skills mildly anti-correlate
+
+=== board-strength estimator quality (board-decided holdout) ===
+  Glicko (board-tuned)    0.48047
+  beta/kappa (board chan) 0.46077   <- a cleaner board rating wins
 ```
 
 κ appears in both the *sum* (flag likelihood) and the *difference* (who wins the flag) — that cross-structure is what identifies it separately from β. A [recovery check on deliberately decorrelated latents](#) confirmed the sampler *separates* the two skills (recovered correlation ≈ 0.07 against a true 0) rather than collapsing them.
@@ -194,6 +268,34 @@ If skill drifts *gradually* (τ ≈ 0.03), then a **sudden jump** is a red flag 
 Each **λ_t** is a per-player, per-month *variance inflator*. A normal step keeps λ ≈ 1; a jump too large for ordinary drift gets a huge λ, because the heavy tail makes that cheap. **The posterior mean of λ is an anomaly score.**
 
 Validated on synthetic data (planted 20 jumpers → **18 caught**, with jumpers averaging **300×** the λ of normal players), the detector was pointed at the real cohort.
+
+The only change from the Part A dynamic model is that each random-walk step gets its own latent variance inflator `λ`, with a conjugate inverse-gamma update. A quiet month keeps `λ ≈ 1`; a jump too large for ordinary drift inflates it:
+
+```python
+# per-step squared jumps, then lambda ~ InvGamma given the jump size
+dth = theta[:, 1:] - theta[:, :-1]
+ss = dth ** 2
+a_lam = (nu + 1.0) / 2.0
+b_lam = (nu + ss / tau2) / 2.0
+lam = b_lam / random.gamma(klam, a_lam, ss.shape)   # posterior mean = anomaly score
+```
+
+Validated on synthetic jumpers, then run on the real cohort, `λ` discriminates gradual climbers from accounts that jump:
+
+```
+=== anomaly scores (max lambda over the window) ===
+population median max-lambda: 2.26     population 99th pct: 4.69
+
+  MaggiChess16      max-lambda   2.3  (pct 50.4)   <- cleared: gradual
+  InvinxibleFlxsh   max-lambda   2.3  (pct 48.0)   <- cleared: gradual
+  VEER-OMEGA-BOT    max-lambda  10.9  (pct 99.8)   <- flagged: jumped
+
+top anomalies (invisible to a rating filter):
+  SELMERMKVI   jump at bucket 3:  theta -1.94 -> -0.19   (+1.75 in one month)
+  Abdurrehi    jump at bucket 3:  theta -0.90 -> +0.18   (+1.08)
+```
+
+Against a drift baseline of `tau = 0.022`, a one-month jump of +1.75 is ~80 normal monthly steps — not learning.
 
 ### It discriminates strength from anomaly
 
