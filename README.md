@@ -88,15 +88,11 @@ Real games from the **[Lichess Open Database](https://database.lichess.org/)** (
 | `glicko_white` | float64 | White's pre-game Glicko-2 rating (baseline comparison + dynamic-model seed) |
 | `glicko_black` | float64 | Black's pre-game Glicko-2 rating |
 
-### A clean side-result: the model found the bots by itself
-
-Fitting the static model, the highest-skill accounts turned out to be **chess engines** — `Stockfish13`, `ArasanX`, and others — clustered at the θ ceiling (~+3.1). The model flagged them with no knowledge of account types, purely from skill. Cross-checking against the Lichess titles API confirmed **114 BOT accounts** (including human-*named* ones like `Moment-That-Inspires` that a name filter would miss). Removing their 348k games (6.3%) is the cleaned dataset everything else runs on.
-
 ---
 
 ## Part A — Auditing Glicko-2 on its own terms
 
-**The fair fight:** same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
+We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
 
 We built a **baseline ladder** — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
 
@@ -110,7 +106,7 @@ We built a **baseline ladder** — starting from nothing and adding one piece of
 
 ### Finding 1 — Glicko-2's ratings are miscalibrated in scale
 
-The single biggest improvement in the whole ladder isn't the ratings themselves — it's **rescaling** them (**+0.00997**, more than everything else combined). The fitted scale is **~0.44** against a theoretical **0.588**, meaning Glicko-2's rating *differences* run **~25% hotter** than the outcomes justify. A nominal 200-point gap behaves like ~150.
+The biggest improvement in the whole ladder is rescaling them (**+0.00997**, more than everything else combined). The fitted scale is **~0.44** against a theoretical **0.588**, meaning Glicko-2's rating *differences* run **~25% hotter** than the outcomes justify. A nominal 200-point gap behaves like ~150.
 
 ### Finding 2 — Skill is more stable than Glicko-2 assumes
 
