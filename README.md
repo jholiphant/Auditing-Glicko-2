@@ -10,7 +10,7 @@ Everything here is implemented in [**JAX**](https://docs.jax.dev/en/latest/noteb
 
 ---
 
-## TL;DR — Three results
+## TL;DR — 2 results
 
 | | Question | Result |
 |---|---|---|
@@ -106,7 +106,7 @@ A hand-written **blocked Gibbs sampler**. Each sweep:
 
 The output is a posterior: a cloud of samples that gives both a rating and uncertainty, and predictions that average over that uncertainty.
 
-**Every sampler is validated by simulation-based recovery** before it touches real data: generate games from known skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
+Every sampler is validated by simulation-based recovery before it touches real data: generate games from known skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
 
 ---
 
