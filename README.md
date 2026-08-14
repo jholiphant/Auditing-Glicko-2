@@ -6,7 +6,7 @@
 
 This project audits **Glicko-2**, the rating system behind Lichess, by writing down the full generative model it *approximates* and computing the exact Bayesian posterior with a hand-written MCMC sampler. Along the way it finds that Glicko-2's ratings are miscalibrated in scale, overstate how fast skill changes, and are structurally blind to an entire dimension of chess ability — and it builds a rating that beats Glicko-2 on the games that dimension explains.
 
-Everything here is implemented [**from scratch in JAX**](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html). The samplers, the augmentation schemes, the forward-filtering backward-sampling — all written and validated by hand.
+Everything here is implemented in [**JAX**](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html). The samplers, the augmentation schemes, the forward-filtering backward-sampling — all written and validated by hand.
 
 ---
 
@@ -16,7 +16,6 @@ Everything here is implemented [**from scratch in JAX**](https://docs.jax.dev/en
 |---|---|---|
 | **A** | Can proper Bayesian inference beat Glicko-2 on the same data? | **No — but it reveals two flaws.** Glicko's ratings run ~25% "hot" in scale, and real skill is far more stable than Glicko-2 assumes (drift τ ≈ 0.03). |
 | **B** | How much is the information Glicko-2 *throws away* worth? | **A lot.** Glicko-2 is blind to *clock discipline* (correlation −0.04). Modeling it separately yields a purer board-strength rating that **beats even a board-tuned Glicko-2** (RPS 0.461 vs 0.480). |
-| **C** | Can honest skill modeling catch cheaters as a byproduct? | **Yes.** A heavy-tailed extension flags trajectory *discontinuities* — separating gradual improvers from accounts that suspiciously *jump*. |
 
 ---
 
@@ -105,21 +104,21 @@ A hand-written **blocked Gibbs sampler**. Each sweep:
 2. **Update skill** — draw each player's full trajectory jointly via **forward-filtering backward-sampling (FFBS)**.
 3. **Update shared parameters** — τ, γ, h via conjugate and Metropolis-within-Gibbs steps.
 
-The output is a *posterior*: a cloud of samples that gives both a rating and uncertainty, and predictions that average over that uncertainty.
+The output is a posterior: a cloud of samples that gives both a rating and uncertainty, and predictions that average over that uncertainty.
 
-**Every sampler is validated by simulation-based recovery** before it touches real data: generate games from *known* skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
+**Every sampler is validated by simulation-based recovery** before it touches real data: generate games from known skills, fit, and confirm the posterior recovers them with correct 95% coverage. A sampler that recovers known truth is one you can trust. A hand-written MCMC sampler that runs cleanly can still be silently wrong — it can produce plausible numbers from a subtly broken update and you'd never know from the output alone. So every sampler in this project is validated the same way before it touches a single real game: generate synthetic data from known parameters, fit the model, and confirm it recovers the truth.
 
 ---
 
 ## Part A — Auditing Glicko-2 on its own terms
 
-Part A takes the base model and adds time. A single θ per player becomes a trajectory across twelve monthly buckets, linked by a Gaussian random walk whose step size τ is the object of interest — it is the exact quantity Glicko-2 fixes by hand as its volatility constant. The sampler's skill step is replaced by forward-filtering backward-sampling: a Kalman filter runs up each player's twelve-bucket chain combining the random-walk prior with each month's game evidence, then a backward pass draws the entire trajectory jointly. Sampling the whole path at once — rather than one bucket at a time — is what lets the chain mix, since adjacent months are strongly correlated. To make the comparison against Glicko-2 information-fair rather than penalizing our model for seeing only a twelve-month window, each player's bucket-zero prior is seeded with their pre-window Glicko rating. The result is a direct read on Glicko-2's core assumption: estimated freely, the drift τ comes out far smaller than Glicko-2 assumes, which is why the dynamic model collapses onto the static one.
+Part A takes the base model and adds time. A single θ per player becomes a trajectory across twelve monthly buckets, linked by a Gaussian random walk whose step size τ is the object of interest — the quantity Glicko-2 fixes by hand as its volatility constant. The sampler's skill step is replaced by forward-filtering backward-sampling: a Kalman filter runs up each player's twelve-bucket chain combining the random-walk prior with each month's game evidence, then a backward pass draws the entire trajectory jointly. Sampling the whole path at once — rather than one bucket at a time — is what lets the chain mix, since adjacent months are strongly correlated. To make the comparison against Glicko-2 information-fair rather than penalizing our model for seeing only a twelve-month window, each player's bucket-zero prior is seeded with their pre-window Glicko rating.
 
 We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
 
-We built a **baseline ladder** — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
+We built a baseline ladder — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
 
-Each rung of the ladder fits *only* what it's allowed and scores prospectively on the holdout — this is the ordered-probit prediction as a function of the Glicko rating difference, with scale `s`, draw margin `g`, and white advantage `h`:
+Each rung of the ladder fits only what it's allowed and scores prospectively on the holdout — this is the ordered-probit prediction as a function of the Glicko rating difference, with scale `s`, draw margin `g`, and white advantage `h`:
 
 ```python
 def probs_from(h, g, s, m):
@@ -134,7 +133,7 @@ Adding one capability at a time and re-fitting by maximum likelihood produces th
 === clean baseline ladder (holdout RPS) ===
   B-null  marginal rates  0.49835
   B0      raw Glicko      0.49514   (delta +0.00321)
-  B0b     + scale         0.48517   (delta +0.00997)   <- the big one
+  B0b     + scale         0.48517   (delta +0.00997)   
   B1      + draw margin   0.48411   (delta +0.00106)
   B2      + white adv     0.48351   (delta +0.00060)
 
@@ -159,13 +158,11 @@ The biggest improvement in the whole ladder is rescaling them (**+0.00997**, mor
 
 Estimating the drift rate freely, the model settled at **τ ≈ 0.03** — far below the volatility Glicko-2 builds in. For highly active players over a year, skill barely moves. This is *why* the dynamic model collapses onto the static one: there's little drift to track.
 
-### The honest verdict
+### Verdict
 
 Neither the static joint model (RPS **0.48471**) nor the Glicko-seeded dynamic model (**0.48486**) beats fully-tuned Glicko-2 (**0.48351**) on pure outcome prediction — even after seeding each player's prior with their career Glicko rating to neutralize the information gap.
 
 > **Glicko-2's ratings carry real signal but sit on the wrong scale, and its volatility is larger than the data warrants — yet its sequential filter remains hard to beat on outcome prediction from a bounded window.**
-
-That's a losing fight, fairly fought — and the *way* it loses is the finding. The winnable question is different.
 
 ---
 
@@ -247,91 +244,24 @@ On **1.66M board-decided holdout games**, β beats even a Glicko-2 baseline **re
 | Glicko-2 (re-tuned on board games) | 0.48047 |
 | **β / κ model (board channel)** | **0.46077** |
 
-A fair, prospective, leakage-free **0.0197 RPS improvement** — the project's clean predictive win.
+Result: **0.0197 RPS improvement** 
 
-> **An honest boundary:** the clock channel, while a real skill, is *not* prospectively predictable game-to-game — you can't know in advance which games will flag, and a fair prediction that marginalizes over flag probability does *not* beat Glicko on flag outcomes. The information Glicko ignores is real but only *partially* recoverable: it sharpens board prediction, but clock outcomes stay near-random per game.
+> **Caveat:** the clock channel, while a real skill, is *not* prospectively predictable game-to-game — you can't know in advance which games will flag, and a fair prediction that marginalizes over flag probability does *not* beat Glicko on flag outcomes. The information Glicko ignores is real but only *partially* recoverable: it sharpens board prediction, but clock outcomes stay near-random per game.
 
 *(This boundary was found by catching a data leak: an earlier version used each holdout game's own flag status to pick its predictor — information available only after the game. The corrected, marginalized result is the one reported here.)*
 
----
+### Evaluation in Production Context — This should not replace Glicko-2, but should exist alongside
 
-## Part C — Cheater detection
-
-Part C returns to the dynamic model and changes one assumption: the random-walk steps are no longer Gaussian but Student-t, implemented as an inverse-gamma scale mixture. Concretely, each month-to-month step gets its own latent variance inflator λ, so a step's innovation variance becomes τ²·λ rather than a fixed τ². A normal month of play keeps λ near one; a jump too large for ordinary drift is absorbed cheaply by inflating λ, because the heavy tail makes large steps far less surprising than a Gaussian would. Conjugacy is preserved — with λ known, the step is Gaussian and FFBS runs unchanged, and λ itself has a clean conjugate inverse-gamma update given the observed jump. The posterior mean of λ then serves directly as a per-player, per-month anomaly score: it flags accounts whose skill jumps discontinuously, distinguishing genuine gradual improvement from the step-changes characteristic of sandbagging or account transitions — a capability that emerges from the generative model rather than being built in.
-
-If skill drifts *gradually* (τ ≈ 0.03), then a **sudden jump** is a red flag — the signature of sandbagging, account-sharing, or a switch to engine assistance. We make the random-walk innovations **heavy-tailed** (Student-t, via an inverse-gamma scale mixture):
-
-```
-θ(t) − θ(t−1) ~ N(0, τ² · λ_t),     λ_t ~ InvGamma(ν/2, ν/2)
-```
-
-Each **λ_t** is a per-player, per-month *variance inflator*. A normal step keeps λ ≈ 1; a jump too large for ordinary drift gets a huge λ, because the heavy tail makes that cheap. **The posterior mean of λ is an anomaly score.**
-
-Validated on synthetic data (planted 20 jumpers → **18 caught**, with jumpers averaging **300×** the λ of normal players), the detector was pointed at the real cohort.
-
-The only change from the Part A dynamic model is that each random-walk step gets its own latent variance inflator `λ`, with a conjugate inverse-gamma update. A quiet month keeps `λ ≈ 1`; a jump too large for ordinary drift inflates it:
-
-```python
-# per-step squared jumps, then lambda ~ InvGamma given the jump size
-dth = theta[:, 1:] - theta[:, :-1]
-ss = dth ** 2
-a_lam = (nu + 1.0) / 2.0
-b_lam = (nu + ss / tau2) / 2.0
-lam = b_lam / random.gamma(klam, a_lam, ss.shape)   # posterior mean = anomaly score
-```
-
-Validated on synthetic jumpers, then run on the real cohort, `λ` discriminates gradual climbers from accounts that jump:
-
-```
-=== anomaly scores (max lambda over the window) ===
-population median max-lambda: 2.26     population 99th pct: 4.69
-
-  MaggiChess16      max-lambda   2.3  (pct 50.4)   <- cleared: gradual
-  InvinxibleFlxsh   max-lambda   2.3  (pct 48.0)   <- cleared: gradual
-  VEER-OMEGA-BOT    max-lambda  10.9  (pct 99.8)   <- flagged: jumped
-
-top anomalies (invisible to a rating filter):
-  SELMERMKVI   jump at bucket 3:  theta -1.94 -> -0.19   (+1.75 in one month)
-  Abdurrehi    jump at bucket 3:  theta -0.90 -> +0.18   (+1.08)
-```
-
-Against a drift baseline of `tau = 0.022`, a one-month jump of +1.75 is ~80 normal monthly steps — not learning.
-
-### It discriminates strength from anomaly
-
-Three untitled accounts sat at the skill ceiling — suspicious by rating alone. The detector *cleared two and flagged one*:
-
-| Account | Anomaly score (percentile) | Verdict |
-|---|---|---|
-| MaggiChess16 | 50th | **Cleared** — reached the top *gradually* |
-| InvinxibleFlxsh | 48th | **Cleared** — gradual climber |
-| VEER-OMEGA-BOT | 99.8th | **Flagged** — discontinuous jump |
-
-Reaching the top isn't suspicious; *jumping* there is. A naive "high rating = suspicious" heuristic would have lumped all three together — the model separates them.
-
-### It surfaces non-obvious cases
-
-The highest anomaly scores belonged to accounts *invisible to a rating filter* — mid-cohort players with a sharp, localized discontinuity:
-
-```
-SELMERMKVI     jump at bucket 3:  θ −1.94 → −0.19   (+1.75 in one month)
-Abdurrehi      jump at bucket 3:  θ −0.90 → +0.18   (+1.08)
-slongar699     jump at bucket 6:  θ −0.50 → +0.17   (+0.68)
-```
-
-Against a τ = 0.022 baseline, a jump of +1.75 is **~80 normal monthly steps in a single month** — not learning. The pattern (start below average, abruptly play at par) is the classic smurf/sandbag signature.
-
-> **Scoped honestly:** these are *statistical anomalies* — a superset of cheating that also captures smurfing and calibration artifacts — not proven violations. None were independently closed by Lichess's anti-cheat during the window. But "trajectory discontinuities inconsistent with any human skill process, detected independently of rating level, emerging from an honest generative model" is a real, discriminating capability.
+Training costs skyrocket with this new model due to Glicko just doing a handful of operations incrementally after each game, whereas the BK model is a full batch MCMC fit over the whole dataset. 2,000 sweeps × 5.2M games on a GPU, ~4–6 minutes per run for the two-channel model, and it has to be re-run to incorporate new games — there's no incremental update. The verdict is to combine the two: Glicko-2 for game to game inference then batch job for score corrections and optimization to save money.
 
 ---
 
-## What ties it together
+## Conclusion
 
-Three lenses on one question — *what is Glicko-2 getting wrong, and can we do better?*
+Two lenses on one question — *what is Glicko-2 getting wrong, and can we do better?*
 
 - **Part A** audits it on its own terms: the ratings are **miscalibrated in scale** and **overstate volatility**, but the filter is strong.
 - **Part B** attacks what it *can't* see: it's **blind to clock discipline**, and separating that out yields a **measurably better board rating**.
-- **Part C** shows the framework does something Glicko-2 can't do at all: **flag anomalous trajectories** as a natural byproduct of modeling skill honestly.
 
 None of it uses a pre-trained model. Every posterior comes from a sampler written and validated by hand.
 
