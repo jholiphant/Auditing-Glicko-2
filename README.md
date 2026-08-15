@@ -19,6 +19,29 @@ Everything here is implemented in [**JAX**](https://docs.jax.dev/en/latest/noteb
 
 ---
 
+## How Glicko-2 works
+
+Like its ancestor Elo, Glicko-2 assigns each player a rating representing skill, and predicts a game's outcome from the difference between the two players' ratings: a larger gap means the stronger player is more likely to win. After each game, the winner's rating goes up and the loser's goes down, by an amount that depends on how surprising the result was — beating a much stronger opponent moves your rating more than beating a weaker one.
+
+Glicko-2 adds three things Elo lacks:
+
+- **A rating deviation (RD)** — an *uncertainty* attached to each rating. A brand-new or long-inactive player has a high RD (the system isn't sure how good they are), so their rating moves quickly; a player with hundreds of recent games has a low RD, so their rating is stable. This makes Glicko-2 an approximate **Bayesian filter**: it maintains a Gaussian belief — a mean (the rating) and a spread (the RD) — about each player's true skill, and narrows that belief as evidence accumulates.
+
+- **A volatility (σ)** — a per-player estimate of how *erratic* their results have been, which controls how much the RD is allowed to grow between games. This is meant to let ratings respond faster to players whose skill is genuinely changing.
+
+- **Time-aware uncertainty** — when a player doesn't play, their RD grows, encoding that the system becomes less certain about someone it hasn't seen recently.
+
+Under the hood, Glicko-2 processes games in **rating periods** and updates each player with a few closed-form equations per period. That efficiency is the whole point: it runs online, in real time, over billions of games, on modest hardware.
+
+But that efficiency comes from **approximations**, and those approximations are what this project examines:
+
+- It updates **one player at a time**, treating every opponent's rating as a fixed, known constant — when in reality those opponents are uncertain quantities being estimated from the same games.
+- Its **volatility mechanism uses hand-set constants** (a system-wide parameter τ that bounds how fast volatility itself can change) rather than learning the true rate of skill change from the data.
+- It runs **four independent systems** for bullet, blitz, rapid, and classical, sharing no information between them.
+- It sees **only the final result** — win, draw, or loss — and nothing about *how* the game was decided.
+
+Each of those is a deliberate trade of accuracy for speed. The rest of this project writes down the full Bayesian model Glicko-2 is approximating, computes its exact posterior with MCMC, and measures what each approximation costs.
+
 ## The core idea
 
 Glicko-2 is already a Bayesian method — it maintains a Gaussian belief (a rating and an uncertainty) about each player and updates it after every game. But to run online, in real time, over a billion games, it takes shortcuts:
