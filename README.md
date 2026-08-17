@@ -6,8 +6,7 @@
 
 This project audits **Glicko-2**, the rating system behind Lichess, by writing down the full generative model it *approximates* and computing the exact Bayesian posterior with a hand-written MCMC sampler. Along the way it finds that Glicko-2's ratings are miscalibrated in scale, overstate how fast skill changes, and are structurally blind to an entire dimension of chess ability — and it builds a rating that beats Glicko-2 on the games that dimension explains.
 
-Everything here is implemented in [**JAX**](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html). The samplers, the augmentation schemes, the forward-filtering backward-sampling — all written and validated by hand.
-
+Everything here is implemented in [**JAX**](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html).
 ---
 
 ## TL;DR — 2 results
