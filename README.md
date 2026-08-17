@@ -123,7 +123,7 @@ and τ — the drift rate Glicko-2 fixes by hand — is estimated from the data.
 
 A hand-written **blocked Gibbs sampler**. Each sweep:
 
-1. **Augment** — draw the latent D for every game from a truncated normal ([Albert–Chib](https://www.jstor.org/stable/2290350) data augmentation, which makes the ordinal likelihood conjugate).
+1. **Augment** — draw the latent D for every game from a truncated normal
 2. **Update skill** — draw each player's full trajectory jointly via **forward-filtering backward-sampling (FFBS)**.
 3. **Update shared parameters** — τ, γ, h via conjugate and Metropolis-within-Gibbs steps.
 
@@ -137,7 +137,7 @@ Every sampler is validated by simulation-based recovery before it touches real d
 
 Part A takes the base model and adds time. A single θ per player becomes a trajectory across twelve monthly buckets, linked by a Gaussian random walk whose step size τ is the object of interest — the quantity Glicko-2 fixes by hand as its volatility constant. The sampler's skill step is replaced by forward-filtering backward-sampling: a Kalman filter runs up each player's twelve-bucket chain combining the random-walk prior with each month's game evidence, then a backward pass draws the entire trajectory jointly. Sampling the whole path at once — rather than one bucket at a time — is what lets the chain mix, since adjacent months are strongly correlated. To make the comparison against Glicko-2 information-fair rather than penalizing our model for seeing only a twelve-month window, each player's bucket-zero prior is seeded with their pre-window Glicko rating.
 
-We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting) (lower = better).
+We use the same data as Glicko-2, prospective predictions only, scored by [Ranked Probability Score](https://en.wikipedia.org/wiki/Probabilistic_forecasting).
 
 We built a baseline ladder — starting from nothing and adding one piece of Glicko's information at a time — to decompose exactly where its predictive power comes from:
 
@@ -175,11 +175,11 @@ The scale correction alone (**+0.00997**) dwarfs every other rung — the fitted
 
 ### Finding 1 — Glicko-2's ratings are miscalibrated in scale
 
-The biggest improvement in the whole ladder is rescaling them (**+0.00997**, more than everything else combined). The fitted scale is **~0.44** against a theoretical **0.588**, meaning Glicko-2's rating *differences* run **~25% hotter** than the outcomes justify. A nominal 200-point gap behaves like ~150.
+The biggest improvement in the whole ladder is rescaling them (**+0.00997**, more than everything else combined). The fitted scale is **~0.44** against a theoretical **0.588**, meaning Glicko-2's rating differences run ~25% hotter than the outcomes justify. A nominal 200-point gap behaves like ~150.
 
 ### Finding 2 — Skill is more stable than Glicko-2 assumes
 
-Estimating the drift rate freely, the model settled at **τ ≈ 0.03** — far below the volatility Glicko-2 builds in. For highly active players over a year, skill barely moves. This is *why* the dynamic model collapses onto the static one: there's little drift to track.
+Estimating the drift rate freely, the model settled at τ ≈ 0.03 — far below the volatility Glicko-2 builds in. For highly active players over a year, skill barely moves. This is *why* the dynamic model collapses onto the static one: there's little drift to track.
 
 ### Verdict
 
@@ -193,14 +193,14 @@ Neither the static joint model (RPS **0.48471**) nor the Glicko-seeded dynamic m
 
 Part B keeps the ordered-probit outcome model but splits the single skill θ into two latent abilities per player: board strength β and clock discipline κ. The key move is that a game now speaks through two observation channels instead of one. Every game contributes a flag-fall observation — did it end on the clock? — modeled as a probit in the sum of the two players' κ, since a flag is more likely when either player manages time poorly. Decisive games additionally contribute a win observation: board-decided games are the ordinary ordered probit in the β-difference, while clock-decided games are a probit in the κ-difference, since the better clock-manager wins the flag race. Because κ enters through both a sum (the flag channel) and a difference (the flag-race channel) while β enters only through board outcomes, the two skills are separately identified — the augmentation and conjugate updates run once per channel, and κ's update aggregates evidence from both places it appears. This is what lets the model measure a dimension of skill Glicko-2's single rating cannot represent.
 
-Glicko-2 sees only *win / draw / loss*. It discards **how** a game ended. But **~28% of decided games end on the clock** (a flag-fall), and *clock management is plausibly a different skill from board strength.*
+Glicko-2 sees only *win / draw / loss*. It discards how a game ended. But ~28% of decided games end on the clock** (a flag-fall), and clock management is plausibly a different skill from board strength.
 
 So we gave each player **two** latent skills:
 
 - **β** — board strength: who wins when the game is played out.
 - **κ** — clock discipline: who survives, and wins, on time.
 
-tied together by a **two-channel likelihood**:
+tied together by a two-channel likelihood:
 
 ```
 FLAG channel (all games):   P(game flags) = Φ( −(κ_white + κ_black) + c )
@@ -211,7 +211,7 @@ WIN channel (decisive games):
    clock-decided  →  probit in (κ_white − κ_black)   ← better clock discipline wins the flag race
 ```
 
-Board strength `β` updates only from board-decided games. Clock discipline `κ` is the interesting one — it aggregates evidence from **both** channels it appears in: the flag indicator (a *sum* of κ's) and the flag-race winner (a *difference*):
+Board strength `β` updates only from board-decided games. Clock discipline `κ` is the interesting one — it aggregates evidence from both channels it appears in: the flag indicator (a sum of κ's) and the flag-race winner (a difference):
 
 ```python
 # (a) flag channel — kappa's LEVEL: obs of kappa_w = -(Fstar - c) - kappa_b
@@ -240,7 +240,7 @@ corr(beta,  kappa):              -0.285   <- the two skills mildly anti-correlat
   beta/kappa (board chan) 0.46077   <- a cleaner board rating wins
 ```
 
-κ appears in both the *sum* (flag likelihood) and the *difference* (who wins the flag) — that cross-structure is what identifies it separately from β. A [recovery check on deliberately decorrelated latents](#) confirmed the sampler *separates* the two skills (recovered correlation ≈ 0.07 against a true 0) rather than collapsing them.
+κ appears in both the sum (flag likelihood) and the difference (who wins the flag) — that cross-structure is what identifies it separately from β. A [recovery check on deliberately decorrelated latents](#) confirmed the sampler separates the two skills (recovered correlation ≈ 0.07 against a true 0) rather than collapsing them.
 
 ### Finding 3 — Glicko-2 is blind to clock discipline
 
@@ -257,7 +257,7 @@ Glicko-2 conflates two distinct skills into one number. Worse, they pull in *opp
 
 ### Finding 4 — Separating the skills yields a better board rating
 
-Because Glicko's rating is *contaminated* by clock-decided games it can't distinguish from board play, it's a noisier estimate of who's actually stronger over the board. Estimating **β from board outcomes only** removes that contamination.
+Because Glicko's rating is contaminated by clock-decided games it can't distinguish from board play, it's a noisier estimate of who's actually stronger over the board. Estimating **β from board outcomes only** removes that contamination.
 
 On **1.66M board-decided holdout games**, β beats even a Glicko-2 baseline **re-tuned specifically for board games**:
 
