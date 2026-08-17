@@ -70,7 +70,7 @@ def _sample_D(key, mu, y, gamma):
     return mu + ndtri(p)                            # invert -> a valid draw
 ```
 
-Once `D` is drawn, every skill update is a conjugate Gaussian step — the entire sweep is JIT-compiled and runs resident on the GPU, giving ~2 minutes for a 2,000-sweep chain over 5.2M games (versus ~78 minutes for the same math on CPU).
+Once `D` is drawn, every skill update is a conjugate Gaussian step.
 
 ---
 
@@ -101,7 +101,7 @@ Real games from the **[Lichess Open Database](https://database.lichess.org/)** (
 
 ### The model
 
-Skill is a latent variable we never observe directly. We model each game's outcome as a coarsening of a latent Gaussian *performance difference*:
+Skill is a latent variable we never observe directly. We model each game's outcome as a coarsening of a latent Gaussian performance difference:
 
 ```
 D_g = θ(white) − θ(black) + h + ε_g,     ε_g ~ N(0, 1)
@@ -111,13 +111,13 @@ D_g = θ(white) − θ(black) + h + ε_g,     ε_g ~ N(0, 1)
               black wins   if  D_g < −γ
 ```
 
-where **θ** is latent skill, **h** the white-move advantage, and **γ** the draw margin. In the dynamic version, skill follows a random walk across 12 monthly buckets:
+where θ is latent skill, **h** the white-move advantage, and **γ** the draw margin. In the dynamic version, skill follows a random walk across 12 monthly buckets:
 
 ```
 θ(t) = θ(t−1) + w_t,     w_t ~ N(0, τ²)
 ```
 
-and **τ — the drift rate Glicko-2 fixes by hand — is estimated from the data.**
+and τ — the drift rate Glicko-2 fixes by hand — is estimated from the data.
 
 ### The sampler
 
