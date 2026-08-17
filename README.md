@@ -183,7 +183,7 @@ Estimating the drift rate freely, the model settled at τ ≈ 0.03 — far below
 
 ### Verdict
 
-Neither the static joint model (RPS **0.48471**) nor the Glicko-seeded dynamic model (**0.48486**) beats fully-tuned Glicko-2 (**0.48351**) on pure outcome prediction — even after seeding each player's prior with their career Glicko rating to neutralize the information gap.
+Neither the static joint model (RPS **0.48471**) nor the Glicko-seeded dynamic model (**0.48486**) beats fully-tuned Glicko-2 (**0.48351**) on pure outcome prediction — even after seeding each player's prior with their career Glicko rating to neutralize the information gap. The main driver of this is almost certainly that Glicko-2 has the player's full game history to model off of, something it can do because of its more lightweight mathematical operations to derive.
 
 > **Glicko-2's ratings carry real signal but sit on the wrong scale, and its volatility is larger than the data warrants — yet its sequential filter remains hard to beat on outcome prediction from a bounded window.**
 
